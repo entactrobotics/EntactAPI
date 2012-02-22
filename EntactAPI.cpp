@@ -1,6 +1,5 @@
 // EntactAPI.cpp : Defines the exported functions for the DLL application.
 //
-
 #ifdef UNICODE
 	#define	Seeifdef	Unicode
 #else
@@ -23,6 +22,7 @@
 
 #include <stdio.h>
 #include <stdlib.h>
+
 #include <stdint.h>
 #include <math.h>
 #include <iostream>
@@ -34,30 +34,39 @@
 /******************************************************************************* 
 Defines
 ********************************************************************************/
-#define REMOTE_PORT		(55556)
-#define LOCAL_PORT		(55555)
-#define RECV_TIMOUT		(100)			// milli-seconds (different in linux???)
-#define MAX_N_DEVICES	(16)
-#define MAX_Q_ELEMENTS	(8)
+#define BROADCAST_PORT		(55555)
+#define REMOTE_PORT			(55556)
+#define LOCAL_PORT_BASE		(55560)
+#define RECV_TIMOUT			(100)			// milli-seconds (different in linux???)
+#define MAX_N_DEVICES		(16)
+#define MAX_Q_ELEMENTS		(8)
 
 /******************************************************************************* 
 Global Data 
 ********************************************************************************/
 typedef struct {
-	int serialno;							// The Serial Number of the device
-	char productname[256];					// The devices product name
-	char name[256];							// The devices user defined name
+	int serialno;						// The Serial Number of the device
+	char productname[256];				// The devices product name
+	char name[256];						// The devices user defined name
 } device_info_t;
 
 typedef struct {
 	device_info_t device_info;									// the devices information
-	struct sockaddr_in addr;									// server information for device
+#if defined(_MSC_VER)	// Microsoft compiler
+	SOCKET sd;
+#elif defined(__GNUC__) // GNU compiler
+    int sd;
+#else
+	#error define your compiler
+#endif
+	struct sockaddr_in addr;									// send port for device
+	struct sockaddr_in listen_addr;								// listen port for the device
 	double q[MAX_Q_ELEMENTS];									// joint angles in radians
 	double qd[MAX_Q_ELEMENTS];									// joint velocity in radians/s
-	double pos[3];														// task position (X,Y,Z)
-	double or[9];															// task orientation (Or Matrix)
-	double posdot[3];													// task velocity (Xd,Yd,Zd)
-	double omega[3];													// rotational velocity
+	double pos[3];												// task position (X,Y,Z)
+	double or[9];												// task orientation (Or Matrix)
+	double posdot[3];											// task velocity (Xd,Yd,Zd)
+	double omega[3];											// rotational velocity
 	int (*pt2forwardKin)(double*,double*);						// forward kinematics function pointer
 	void (*pt2eventCB)(unsigned char);							// device disabled event, callback function pointer
 } EAPI_device;
@@ -65,7 +74,7 @@ typedef struct {
 // Device info structures; fixed to MAX_N_DEVICES at the moment (figure out how to do this dynamically in the future)
 EAPI_device deviceList[MAX_N_DEVICES]; 
 
-// function prototypes
+// Function prototypes
 static int init_udp();
 static int uninit_udp();
 static int discover_devices(int *n_devices);
@@ -79,8 +88,6 @@ static int discover_devices(int *n_devices);
 #else
 	#error define your compiler
 #endif
-
-sockaddr_in local_addr;
 
 // API state information
 int api_init = 0;		// API had been initialized
@@ -198,10 +205,10 @@ ENTACTAPI_API int setSampleRateEAPI(eapi_device_handle handle, int frequency)
 	packet.len = sizeof(freq);
 	memcpy((void*) packet.payload, (void*) &freq, sizeof(frequency));
 	pkt_size = sizeof(packet) - sizeof(packet.payload) + packet.len;
-	if(sendto(sd, (const char*) &packet, pkt_size, 0, (struct sockaddr *) &((EAPI_device *) handle)->addr, sizeof(sockaddr_in)) == SOCKET_ERROR) return EAPI_ERR;
+	if(sendto(((EAPI_device *) handle)->sd, (const char*) &packet, pkt_size, 0, (struct sockaddr *) &((EAPI_device *) handle)->addr, sizeof(sockaddr_in)) == SOCKET_ERROR) return EAPI_ERR;
 
 	// acknowledgement packet here to verify 
-	rec_len = recvfrom(sd, (char*) &ackpacket, sizeof(ackpacket), 0, NULL, NULL);
+	rec_len = recvfrom(((EAPI_device *) handle)->sd, (char*) &ackpacket, sizeof(ackpacket), 0, NULL, NULL);
 	if (rec_len == SOCKET_ERROR) return EAPI_ERR;
 
 	if ((ackpacket.cmd == EAPI_OUTPKT_ACK)&&(ackpacket.payload[0] == ACK_FREQ_CHANGED))
@@ -243,9 +250,9 @@ ENTACTAPI_API int setModeEAPI(eapi_device_handle handle, int mode)
 
 	packet.len = 0;
 	pkt_size = sizeof(packet) - sizeof(packet.payload) + packet.len;
-	if(sendto(sd, (const char*) &packet, pkt_size, 0, (struct sockaddr *) &((EAPI_device *) handle)->addr, sizeof(sockaddr_in)) == SOCKET_ERROR) return EAPI_ERR;
+	if(sendto(((EAPI_device *) handle)->sd, (const char*) &packet, pkt_size, 0, (struct sockaddr *) &((EAPI_device *) handle)->addr, sizeof(sockaddr_in)) == SOCKET_ERROR) return EAPI_ERR;
 	
-	rec_len = recvfrom(sd, (char*) &ackpacket, sizeof(ackpacket), 0, NULL, NULL);
+	rec_len = recvfrom(((EAPI_device *) handle)->sd, (char*) &ackpacket, sizeof(ackpacket), 0, NULL, NULL);
 	if (rec_len == SOCKET_ERROR) return EAPI_ERR;
 
 	if ((ackpacket.cmd == EAPI_OUTPKT_ACK)&&(ackpacket.payload[0] == ACK_STATE_CHANGED))
@@ -273,10 +280,10 @@ ENTACTAPI_API int getModeEAPI(eapi_device_handle handle)
 	outpkt.cmd = EAPI_INPKT_STATUS;
 	outpkt.len = 0;
 	pkt_size = sizeof(outpkt) - sizeof(outpkt.payload) + outpkt.len;
-	if(sendto(sd, (const char*) &outpkt, pkt_size, 0, (struct sockaddr *) &((EAPI_device *) handle)->addr, sizeof(sockaddr_in)) == SOCKET_ERROR) return EAPI_ERR;
+	if(sendto(((EAPI_device *) handle)->sd, (const char*) &outpkt, pkt_size, 0, (struct sockaddr *) &((EAPI_device *) handle)->addr, sizeof(sockaddr_in)) == SOCKET_ERROR) return EAPI_ERR;
 
 	// recvfrom() status information for the device
-	rec_len = recvfrom(sd, (char*) &statuspkt, sizeof(statuspkt), 0, NULL, NULL);
+	rec_len = recvfrom(((EAPI_device *) handle)->sd, (char*) &statuspkt, sizeof(statuspkt), 0, NULL, NULL);
 	if (rec_len == SOCKET_ERROR) return EAPI_ERR;
 	if (statuspkt.cmd != EAPI_OUTPKT_STATUS) return EAPI_ERR;
 	if (rec_len != sizeof(statuspkt)) return EAPI_ERR;
@@ -299,10 +306,10 @@ ENTACTAPI_API int homeDeviceEAPI(eapi_device_handle handle)
 	packet.cmd = EAPI_INPKT_HOME;
 	packet.len = 0;
 	pkt_size = sizeof(packet) - sizeof(packet.payload) + packet.len;
-	if(sendto(sd, (const char*) &packet, pkt_size, 0, (struct sockaddr *) &((EAPI_device *) handle)->addr, sizeof(sockaddr_in)) == SOCKET_ERROR) return EAPI_ERR;
+	if(sendto(((EAPI_device *) handle)->sd, (const char*) &packet, pkt_size, 0, (struct sockaddr *) &((EAPI_device *) handle)->addr, sizeof(sockaddr_in)) == SOCKET_ERROR) return EAPI_ERR;
 
 	// acknowledgement packet here to verify 
-	rec_len = recvfrom(sd, (char*) &ackpacket, sizeof(ackpacket), 0, NULL, NULL);
+	rec_len = recvfrom(((EAPI_device *) handle)->sd, (char*) &ackpacket, sizeof(ackpacket), 0, NULL, NULL);
 	if (rec_len == SOCKET_ERROR) return EAPI_ERR;
 
 	if ((ackpacket.cmd == EAPI_OUTPKT_ACK)&&(ackpacket.payload[0] == ACK_HOMED))
@@ -311,10 +318,10 @@ ENTACTAPI_API int homeDeviceEAPI(eapi_device_handle handle)
 		packet.cmd = EAPI_INPKT_GET_DATA;
 		packet.len = 0;
 		pkt_size = sizeof(packet) - sizeof(packet.payload) + packet.len;
-		if(sendto(sd, (const char*) &packet, pkt_size, 0, (struct sockaddr *) &((EAPI_device *) handle)->addr, sizeof(sockaddr_in)) == SOCKET_ERROR) return EAPI_ERR;
+		if(sendto(((EAPI_device *) handle)->sd, (const char*) &packet, pkt_size, 0, (struct sockaddr *) &((EAPI_device *) handle)->addr, sizeof(sockaddr_in)) == SOCKET_ERROR) return EAPI_ERR;
 
 		// recvfrom() data packet with joint values
-		rec_len = recvfrom(sd, (char*) &datapacket, sizeof(datapacket), 0, NULL, NULL);
+		rec_len = recvfrom(((EAPI_device *) handle)->sd, (char*) &datapacket, sizeof(datapacket), 0, NULL, NULL);
 		if (rec_len == SOCKET_ERROR) return EAPI_ERR;
 		if (datapacket.cmd != EAPI_OUTPKT_DATA) return EAPI_ERR;
 		
@@ -341,10 +348,10 @@ ENTACTAPI_API int isHomedEAPI(eapi_device_handle handle)
 	outpkt.cmd = EAPI_INPKT_STATUS;
 	outpkt.len = 0;
 	pkt_size = sizeof(outpkt) - sizeof(outpkt.payload) + outpkt.len;
-	if(sendto(sd, (const char*) &outpkt, pkt_size, 0, (struct sockaddr *) &((EAPI_device *) handle)->addr, sizeof(sockaddr_in)) == SOCKET_ERROR) return EAPI_ERR;
+	if(sendto(((EAPI_device *) handle)->sd, (const char*) &outpkt, pkt_size, 0, (struct sockaddr *) &((EAPI_device *) handle)->addr, sizeof(sockaddr_in)) == SOCKET_ERROR) return EAPI_ERR;
 
 	// recvfrom() status information for the device
-	rec_len = recvfrom(sd, (char*) &statuspkt, sizeof(statuspkt), 0, NULL, NULL);
+	rec_len = recvfrom(((EAPI_device *) handle)->sd, (char*) &statuspkt, sizeof(statuspkt), 0, NULL, NULL);
 	if (rec_len == SOCKET_ERROR) return EAPI_ERR;
 	if (statuspkt.cmd != EAPI_OUTPKT_STATUS) return EAPI_ERR;
 	if (rec_len != sizeof(statuspkt)) return EAPI_ERR;
@@ -369,11 +376,11 @@ ENTACTAPI_API int readJointsEAPI(eapi_device_handle handle, double *pos, double 
 	outpkt.cmd = EAPI_INPKT_GET_DATA;
 	outpkt.len = 0;
 	pkt_size = sizeof(outpkt) - sizeof(outpkt.payload) + outpkt.len;
-	if(sendto(sd, (const char*) &outpkt, pkt_size, 0, (struct sockaddr *) &((EAPI_device *) handle)->addr, sizeof(sockaddr_in)) == SOCKET_ERROR) return EAPI_ERR;
+	if(sendto(((EAPI_device *) handle)->sd, (const char*) &outpkt, pkt_size, 0, (struct sockaddr *) &((EAPI_device *) handle)->addr, sizeof(sockaddr_in)) == SOCKET_ERROR) return EAPI_ERR;
 
 	
 	// Receive back a reply packet (should be with encoder data)
-	rec_len = recvfrom(sd, (char*) &inpkt, sizeof(inpkt), 0, NULL, NULL);
+	rec_len = recvfrom(((EAPI_device *) handle)->sd, (char*) &inpkt, sizeof(inpkt), 0, NULL, NULL);
 	if (rec_len == SOCKET_ERROR) return EAPI_ERR;
 	if (inpkt.cmd != EAPI_OUTPKT_DATA) return EAPI_ERR;
 	if (rec_len != sizeof(udp_outdata_pkt_t)) return EAPI_ERR;
@@ -467,10 +474,10 @@ ENTACTAPI_API int writeForceEAPI(eapi_device_handle handle, double *f, int size)
 	}
 
 	pkt_size = sizeof(packet) - sizeof(packet.task_force) + packet.len;
-	if(sendto(sd, (const char*) &packet, pkt_size, 0, (struct sockaddr *) &((EAPI_device *) handle)->addr, sizeof(sockaddr_in)) == SOCKET_ERROR) return EAPI_ERR;
+	if(sendto(((EAPI_device *) handle)->sd, (const char*) &packet, pkt_size, 0, (struct sockaddr *) &((EAPI_device *) handle)->addr, sizeof(sockaddr_in)) == SOCKET_ERROR) return EAPI_ERR;
 
 	// Receive back a reply packet (should be with encoder data)
-	rec_len = recvfrom(sd, (char*) &inpkt, sizeof(inpkt), 0, NULL, NULL);
+	rec_len = recvfrom(((EAPI_device *) handle)->sd, (char*) &inpkt, sizeof(inpkt), 0, NULL, NULL);
 	if (rec_len == SOCKET_ERROR) return EAPI_ERR;
 	if (inpkt.cmd != EAPI_OUTPKT_DATA) return EAPI_ERR;
 	if (rec_len != sizeof(udp_outdata_pkt_t)) return EAPI_ERR;
@@ -508,6 +515,8 @@ API Private Functions
 // returns 1 on success, returns 0 on failure
 static int init_udp()
 {
+	sockaddr_in local_addr;
+
 	#if defined(_MSC_VER)	// Microsoft compiler
 	if (WSAStartup(0x0101, &w) != NO_ERROR) return 0;
 	#endif
@@ -516,7 +525,7 @@ static int init_udp()
 	if (sd == INVALID_SOCKET) return 0;
 	
 	local_addr.sin_family = AF_INET;
-	local_addr.sin_port = htons(LOCAL_PORT);
+	local_addr.sin_port = htons(BROADCAST_PORT);
 	local_addr.sin_addr.s_addr = htonl(INADDR_ANY);
 	if (bind(sd, (const sockaddr *) &local_addr, sizeof(sockaddr_in)) == SOCKET_ERROR) return 0;
 	
@@ -544,6 +553,7 @@ static int discover_devices(int *n_devices)
 	udp_pkt_t outpkt;
 	udp_status_pkt_t statuspkt;
 	int pkt_size, rec_len, sockaddr_size, valid_msg, dev_found;
+	u_short startport = LOCAL_PORT_BASE;
 
 	// temporarily setting the send socket to broadcast mode
 	bOptVal = TRUE;
@@ -568,23 +578,30 @@ static int discover_devices(int *n_devices)
 	dev_found = 0;
 	while (valid_msg)
 	{
-		//printf("here \n");
 		sockaddr_size = sizeof(struct sockaddr);
 		rec_len = recvfrom(sd, (char*) &statuspkt, sizeof(statuspkt), 0, (struct sockaddr *) &device_address, &sockaddr_size);
 		if (rec_len != SOCKET_ERROR)
 		{
-			// recording the IP address and port information for the device
-			deviceList[dev_found].addr.sin_port = device_address.sin_port;
+			// recording the IP address and port information for the device's listening port
+			deviceList[dev_found].addr.sin_port = htons(REMOTE_PORT); 
 			deviceList[dev_found].addr.sin_addr.S_un.S_addr = device_address.sin_addr.S_un.S_addr;
 			deviceList[dev_found].addr.sin_family = AF_INET;
+
+			// recording the IP address and port information for the API's listening port (one port per attached device)
+			deviceList[dev_found].listen_addr.sin_port = htons(startport++);
+			deviceList[dev_found].listen_addr.sin_addr.s_addr = htonl(INADDR_ANY);
+			deviceList[dev_found].listen_addr.sin_family = AF_INET;
+
+			deviceList[dev_found].sd = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
+			if (deviceList[dev_found].sd == INVALID_SOCKET) return 0;
+
+			if (bind(deviceList[dev_found].sd, (const sockaddr *) &deviceList[dev_found].listen_addr, sizeof(sockaddr_in)) == SOCKET_ERROR) return 0;
 
 			// recording the product/name/serialno for the device
 			memcpy(deviceList[dev_found].device_info.productname, statuspkt.device_type, sizeof(statuspkt.device_type));
 			memcpy(deviceList[dev_found].device_info.name, statuspkt.device_name, sizeof(statuspkt.device_name));
 			deviceList[dev_found].device_info.serialno = statuspkt.serial_no;
 
-			std::cout << "forwardKinematics" << std::endl;
-			printf("forwardKinematics\n");
 			// map the proper kinematics functions for the device
 			// - at the moment we only have W5D's, so these are automatically mapped
 			deviceList[dev_found].pt2forwardKin = forwardKinematics_w5d;
