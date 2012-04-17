@@ -25,6 +25,7 @@
 
 #include <stdint.h>
 #include <math.h>
+
 #include <iostream>
 
 #include "EntactAPI.h"
@@ -40,6 +41,27 @@ Defines
 #define RECV_TIMOUT			(100)			// milli-seconds (different in linux???)
 #define MAX_N_DEVICES		(16)
 #define MAX_Q_ELEMENTS		(8)
+
+
+
+/*************************************
+Linux/Windows
+***************************************/
+#if defined(_MSC_VER)	// Microsoft compiler
+
+#elif defined(__GNUC__) // GNU compiler
+
+  typedef unsigned long DWORD; 
+  #include <string.h>
+  #define SOCKET_ERROR 	-1   
+  #define INVALID_SOCKET 	-1
+  #define NO_ERROR		0
+
+#else
+	#error define your compiler
+#endif
+
+
 
 /******************************************************************************* 
 Global Data 
@@ -64,7 +86,7 @@ typedef struct {
 	double q[MAX_Q_ELEMENTS];									// joint angles in radians
 	double qd[MAX_Q_ELEMENTS];									// joint velocity in radians/s
 	double pos[3];												// task position (X,Y,Z)
-	double or[9];												// task orientation (Or Matrix)
+	double orr[9];												// task orientation (Or Matrix)
 	double posdot[3];											// task velocity (Xd,Yd,Zd)
 	double omega[3];											// rotational velocity
 	int (*pt2forwardKin)(double*,double*);						// forward kinematics function pointer
@@ -84,6 +106,7 @@ static int discover_devices(int *n_devices);
 	WSADATA w;
 	SOCKET sd;
 #elif defined(__GNUC__) // GNU compiler
+    
     int sd;
 #else
 	#error define your compiler
@@ -117,7 +140,7 @@ DLL (or SO) Entry Point
 	case 0: // DLL_PROCESS_DETACH:
 		break;
 	}
-	return TRUE;
+	return true;
 }
 
 /******************************************************************************* 
@@ -407,15 +430,15 @@ ENTACTAPI_API int readTaskPositionEAPI(eapi_device_handle handle, double *taskpo
 			taskpos[1] = ((EAPI_device *) handle)->pos[1]; // Y
 			taskpos[2] = ((EAPI_device *) handle)->pos[2]; // Z
 
-			taskpos[3] = ((EAPI_device *) handle)->or[0]; // R11
-			taskpos[4] = ((EAPI_device *) handle)->or[1]; // R12
-			taskpos[5] = ((EAPI_device *) handle)->or[2]; // R13
-			taskpos[6] = ((EAPI_device *) handle)->or[3]; // R21
-			taskpos[7] = ((EAPI_device *) handle)->or[4]; // R22
-			taskpos[8] = ((EAPI_device *) handle)->or[5]; // R23
-			taskpos[9] = ((EAPI_device *) handle)->or[6]; // R31
-			taskpos[10] = ((EAPI_device *) handle)->or[7]; // R32
-			taskpos[11] = ((EAPI_device *) handle)->or[8]; // R33
+			taskpos[3] = ((EAPI_device *) handle)->orr[0]; // R11
+			taskpos[4] = ((EAPI_device *) handle)->orr[1]; // R12
+			taskpos[5] = ((EAPI_device *) handle)->orr[2]; // R13
+			taskpos[6] = ((EAPI_device *) handle)->orr[3]; // R21
+			taskpos[7] = ((EAPI_device *) handle)->orr[4]; // R22
+			taskpos[8] = ((EAPI_device *) handle)->orr[5]; // R23
+			taskpos[9] = ((EAPI_device *) handle)->orr[6]; // R31
+			taskpos[10] = ((EAPI_device *) handle)->orr[7]; // R32
+			taskpos[11] = ((EAPI_device *) handle)->orr[8]; // R33
 
 			ret_val = 1;
 		}
@@ -490,15 +513,15 @@ ENTACTAPI_API int writeForceEAPI(eapi_device_handle handle, double *f, int size)
 	((EAPI_device *) handle)->posdot[1] = inpkt.posdot[1];
 	((EAPI_device *) handle)->posdot[2] = inpkt.posdot[2];
 
-	((EAPI_device *) handle)->or[0] = inpkt.orr[0];
-	((EAPI_device *) handle)->or[1] = inpkt.orr[1];
-	((EAPI_device *) handle)->or[2] = inpkt.orr[2];
-	((EAPI_device *) handle)->or[3] = inpkt.orr[3];
-	((EAPI_device *) handle)->or[4] = inpkt.orr[4];
-	((EAPI_device *) handle)->or[5] = inpkt.orr[5];
-	((EAPI_device *) handle)->or[6] = inpkt.orr[6];
-	((EAPI_device *) handle)->or[7] = inpkt.orr[7];
-	((EAPI_device *) handle)->or[8] = inpkt.orr[8];
+	((EAPI_device *) handle)->orr[0] = inpkt.orr[0];
+	((EAPI_device *) handle)->orr[1] = inpkt.orr[1];
+	((EAPI_device *) handle)->orr[2] = inpkt.orr[2];
+	((EAPI_device *) handle)->orr[3] = inpkt.orr[3];
+	((EAPI_device *) handle)->orr[4] = inpkt.orr[4];
+	((EAPI_device *) handle)->orr[5] = inpkt.orr[5];
+	((EAPI_device *) handle)->orr[6] = inpkt.orr[6];
+	((EAPI_device *) handle)->orr[7] = inpkt.orr[7];
+	((EAPI_device *) handle)->orr[8] = inpkt.orr[8];
 
 	((EAPI_device *) handle)->omega[0] = inpkt.omega[0];
 	((EAPI_device *) handle)->omega[1] = inpkt.omega[1];
@@ -546,18 +569,18 @@ static int uninit_udp()
 static int discover_devices(int *n_devices)
 {
     sockaddr_in device_address, broadcast_address;
-	BOOL bOptVal;
+	int bOptVal = 1;
 
 	DWORD recv_timout = RECV_TIMOUT; // milli-seconds
 	
 	udp_pkt_t outpkt;
 	udp_status_pkt_t statuspkt;
-	int pkt_size, rec_len, sockaddr_size, valid_msg, dev_found;
+	unsigned int pkt_size, rec_len, sockaddr_size, valid_msg, dev_found;
 	u_short startport = LOCAL_PORT_BASE;
 
 	// temporarily setting the send socket to broadcast mode
-	bOptVal = TRUE;
-	if (setsockopt(sd, SOL_SOCKET, SO_BROADCAST, (char *) &bOptVal, sizeof(BOOL)) ==  SOCKET_ERROR) return 0;
+	bOptVal = true;
+	if (setsockopt(sd, SOL_SOCKET, SO_BROADCAST, (char *) &bOptVal, sizeof(bOptVal)) ==  SOCKET_ERROR) return 0;
 
 	// setting the recv socket with a timeout
 	if (setsockopt(sd, SOL_SOCKET, SO_RCVTIMEO, (char *) &recv_timout, sizeof(DWORD)) ==  SOCKET_ERROR) return 0;
@@ -580,11 +603,12 @@ static int discover_devices(int *n_devices)
 	{
 		sockaddr_size = sizeof(struct sockaddr);
 		rec_len = recvfrom(sd, (char*) &statuspkt, sizeof(statuspkt), 0, (struct sockaddr *) &device_address, &sockaddr_size);
+   
 		if (rec_len != SOCKET_ERROR)
 		{
 			// recording the IP address and port information for the device's listening port
 			deviceList[dev_found].addr.sin_port = htons(REMOTE_PORT); 
-			deviceList[dev_found].addr.sin_addr.S_un.S_addr = device_address.sin_addr.S_un.S_addr;
+			deviceList[dev_found].addr.sin_addr.s_addr = device_address.sin_addr.s_addr;
 			deviceList[dev_found].addr.sin_family = AF_INET;
 
 			// recording the IP address and port information for the API's listening port (one port per attached device)
@@ -618,8 +642,8 @@ static int discover_devices(int *n_devices)
 	*n_devices = dev_found;
 
 	// disabling broadcast mode on the send socket
-	bOptVal = FALSE;
-	if (setsockopt(sd, SOL_SOCKET, SO_BROADCAST, (char *) &bOptVal, sizeof(BOOL)) ==  SOCKET_ERROR) return 0;
+	bOptVal = false;
+	if (setsockopt(sd, SOL_SOCKET, SO_BROADCAST, (char *) &bOptVal, sizeof(bOptVal)) ==  SOCKET_ERROR) return 0;
 	
 	return 1;
 }
