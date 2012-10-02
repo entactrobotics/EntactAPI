@@ -219,7 +219,6 @@ extern "C"
 			taskpos[11] = Rotation Matrix Element 3,3
 		int size,
 			size of the taskpos array which is passed in to the function. for the w5d this would be 12
-<<<<<<< HEAD
 
 		This function is called to obtain the current position/orientation of the haptic devices handle.
 		The device must be calibrated, and in force control mode.
