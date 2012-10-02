@@ -223,6 +223,33 @@ ENTACTAPI_API int setSampleRateEAPI(eapi_device_handle handle, int frequency)
 	return EAPI_ERR;
 }
 
+ENTACTAPI_API int setDampingEAPI(eapi_device_handle handle, double *d, int size)
+{
+	static udp_datafc_pkt_t packet;
+	static udp_outdata_pkt_t inpkt;
+	int pkt_size, i, rec_len;
+
+	if (!api_init) return EAPI_ERR;
+	if ((size<0)||(size>sizeof(packet.task_force))) return EAPI_ERR;
+
+	packet.cmd = EAPI_INPKT_SET_DAMPING;
+	packet.len = size*sizeof(float);
+	for (i=0; i<size; i++)
+	{
+		packet.task_force[i] = (float) d[i];
+	}
+
+	pkt_size = sizeof(packet) - sizeof(packet.task_force) + packet.len;
+	if(sendto(((EAPI_device *) handle)->sd, (const char*) &packet, pkt_size, 0, (struct sockaddr *) &((EAPI_device *) handle)->addr, sizeof(sockaddr_in)) == SOCKET_ERROR) return EAPI_ERR;
+
+	// Receive back a reply packet (should be an ack)
+	rec_len = recvfrom(((EAPI_device *) handle)->sd, (char*) &inpkt, sizeof(inpkt), 0, NULL, NULL);
+	if (rec_len == SOCKET_ERROR) return EAPI_ERR;
+	if (inpkt.cmd != EAPI_OUTPKT_ACK) return EAPI_ERR;
+	
+	return EAPI_OK;
+}
+
 ENTACTAPI_API int setEventCallbackEAPI(eapi_device_handle handle, void (*cbFunc) (unsigned char eventArg))
 {
 	if (!api_init) return EAPI_ERR;
@@ -246,7 +273,8 @@ ENTACTAPI_API int setModeEAPI(eapi_device_handle handle, int mode)
 	packet.cmd = EAPI_INPKT_DISABLE; // default to this mode (if mode parameter is invalid)
 	if (mode == EAPI_DISABLED_MODE) packet.cmd = EAPI_INPKT_DISABLE;	
 	if (mode == EAPI_FORCECONTROL_MODE)	packet.cmd = EAPI_INPKT_ENABLE_FC;
-	if (mode == EAPI_TORQUECONTROL_MODE) packet.cmd = EAPI_INPKT_ENABLE_TC;	
+	if (mode == EAPI_TORQUECONTROL_MODE) packet.cmd = EAPI_INPKT_ENABLE_TC;
+	if (mode == EAPI_POSITIONCONTROL_MODE) packet.cmd = EAPI_INPKT_ENABLE_PC;	
 
 	packet.len = 0;
 	pkt_size = sizeof(packet) - sizeof(packet.payload) + packet.len;
@@ -291,8 +319,20 @@ ENTACTAPI_API int getModeEAPI(eapi_device_handle handle)
 	if (statuspkt.state == 0) return EAPI_DISABLED_MODE; 
 	if (statuspkt.state == 2) return EAPI_FORCECONTROL_MODE;
 	if (statuspkt.state == 4) return EAPI_TORQUECONTROL_MODE;
+	if (statuspkt.state == 6) return EAPI_POSITIONCONTROL_MODE;
 
-	return EAPI_ERR;
+	return EAPI_OK;
+}
+
+ENTACTAPI_API int getDeviceInfoEAPI(eapi_device_handle handle, char *productname, char *name, int size)
+{
+	if (!api_init) return EAPI_ERR;
+
+	memcpy(productname, ((EAPI_device *) handle)->device_info.productname, size);
+	memcpy(name, ((EAPI_device *) handle)->device_info.name, size);
+
+
+	return EAPI_OK;
 }
 
 ENTACTAPI_API int homeDeviceEAPI(eapi_device_handle handle)
@@ -507,6 +547,55 @@ ENTACTAPI_API int writeForceEAPI(eapi_device_handle handle, double *f, int size)
 	return EAPI_OK;
 }
 
+ENTACTAPI_API int writePositionEAPI(eapi_device_handle handle, double *pos, int size)
+{
+	static udp_datapc_pkt_t packet;
+	static udp_outdata_pkt_t inpkt;
+	int pkt_size, i, rec_len;
+
+	if (!api_init) return EAPI_ERR;
+	if ((size<0)||(size>sizeof(packet.task_position))) return EAPI_ERR;
+
+	packet.cmd = EAPI_INPKT_DATA_PC;
+	packet.len = size*sizeof(float);
+	for (i=0; i<size; i++)
+	{
+		packet.task_position[i] = (float) pos[i];
+	}
+
+	pkt_size = sizeof(packet) - sizeof(packet.task_position) + packet.len;
+	if(sendto(((EAPI_device *) handle)->sd, (const char*) &packet, pkt_size, 0, (struct sockaddr *) &((EAPI_device *) handle)->addr, sizeof(sockaddr_in)) == SOCKET_ERROR) return EAPI_ERR;
+
+	// Receive back a reply packet (should be with encoder data)
+	rec_len = recvfrom(((EAPI_device *) handle)->sd, (char*) &inpkt, sizeof(inpkt), 0, NULL, NULL);
+	if (rec_len == SOCKET_ERROR) return EAPI_ERR;
+	if (inpkt.cmd != EAPI_OUTPKT_DATA) return EAPI_ERR;
+	if (rec_len != sizeof(udp_outdata_pkt_t)) return EAPI_ERR;
+
+	((EAPI_device *) handle)->pos[0] = inpkt.pos[0];
+	((EAPI_device *) handle)->pos[1] = inpkt.pos[1];
+	((EAPI_device *) handle)->pos[2] = inpkt.pos[2];
+
+	((EAPI_device *) handle)->posdot[0] = inpkt.posdot[0];
+	((EAPI_device *) handle)->posdot[1] = inpkt.posdot[1];
+	((EAPI_device *) handle)->posdot[2] = inpkt.posdot[2];
+
+	((EAPI_device *) handle)->or[0] = inpkt.orr[0];
+	((EAPI_device *) handle)->or[1] = inpkt.orr[1];
+	((EAPI_device *) handle)->or[2] = inpkt.orr[2];
+	((EAPI_device *) handle)->or[3] = inpkt.orr[3];
+	((EAPI_device *) handle)->or[4] = inpkt.orr[4];
+	((EAPI_device *) handle)->or[5] = inpkt.orr[5];
+	((EAPI_device *) handle)->or[6] = inpkt.orr[6];
+	((EAPI_device *) handle)->or[7] = inpkt.orr[7];
+	((EAPI_device *) handle)->or[8] = inpkt.orr[8];
+
+	((EAPI_device *) handle)->omega[0] = inpkt.omega[0];
+	((EAPI_device *) handle)->omega[1] = inpkt.omega[1];
+	((EAPI_device *) handle)->omega[2] = inpkt.omega[2];
+
+	return EAPI_OK;
+}
 
 /******************************************************************************* 
 API Private Functions 

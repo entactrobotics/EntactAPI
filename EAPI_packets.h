@@ -31,6 +31,14 @@ typedef struct
     float task_force[8];
 } udp_datafc_pkt_t;
 
+// EAPI_INPKT_DATA_PC packet structure
+typedef struct
+{
+    uint16_t cmd;
+    uint16_t len;
+    float task_position[12];
+} udp_datapc_pkt_t;
+
 // EAPI_OUTPKT_STATUS packet structure
 typedef struct
 {
@@ -69,6 +77,9 @@ typedef struct
 #define EAPI_INPKT_ENABLE_TC	(0x0048)
 #define EAPI_INPKT_DATA_TC		(0x0049)
 #define EAPI_INPKT_DISPLAY_ENC	(0x004A)
+#define EAPI_INPKT_SET_DAMPING	(0x004B)
+#define EAPI_INPKT_ENABLE_PC	(0x004C)
+#define EAPI_INPKT_DATA_PC		(0x004D)
 
 #define EAPI_OUTPKT_DATA		(0x0080)
 #define EAPI_OUTPKT_NACK		(0x0081)
